@@ -43,7 +43,9 @@ Notebook 07 uses saved weights. Training ran on Colab GPUs through the job scrip
 | Pseudo-labels | `detector_train_job.py`, which fuses the 24 teacher views at score >= 0.30 | `configs/teachers.json` |
 | Baseline detectors and U-Net | notebooks `02` and `03` | `src/config.py` |
 
-The final detector took about two hours on an A100. To retrain it without the teachers, use the saved labels:
+The 24 teacher views are not in this repo, and neither are the exact settings of the YOLO11m teacher. Their output is: `data/processed/pseudo_boxes.json` holds the labels the final detector trained on, so it can be retrained without them. These scripts were not re-run from this repo, so a retrain may not match the saved weights exactly.
+
+The final detector took about two hours on an A100. To retrain it from the saved labels:
 
 ```bash
 python scripts/launch_pseudo.py SESSION configs/final_detector.json --labels data/processed/pseudo_boxes.json --gpu A100
