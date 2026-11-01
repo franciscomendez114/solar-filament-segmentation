@@ -27,7 +27,7 @@ The final pipeline ties both ensembles on validation (paired 95% CI includes zer
 
 ## Run it
 
-Open `notebooks/07_final_pipeline.ipynb` in Colab with a GPU runtime and run it from top to bottom. It clones this repo, uses the two checkpoints in `weights/`, and shows a prediction. Set `RUN_VALIDATION` to reproduce the validation score, or `RUN_TEST` to write `submission.csv`.
+Open `notebooks/07_final_pipeline.ipynb` in Colab with a GPU runtime and run it from top to bottom. It clones this repo, uses the two checkpoints in `weights/`, shows a prediction, reproduces the validation score, and writes `submission.csv`. Set `RUN_VALIDATION` or `RUN_TEST` to `False` to skip those last two steps.
 
 Competition images and labels are not in this repo because they cannot be redistributed. Put them at `/content/kaggle_data`, or let the notebook download them with a Kaggle token at `~/.kaggle/access_token` from an account that joined the competition.
 

@@ -583,7 +583,7 @@ cells = [
 
         **Data:** put the competition download at `/content/kaggle_data`, or leave it to the next cell, which needs a Kaggle token at `~/.kaggle/access_token` from an account that joined the competition. The images are not in this repo because they cannot be redistributed.
 
-        The demo takes under a minute once the data is in place. Validation (~3 min) and test (~5 min) are behind flags that default to `False`. Training is summarized at the end.
+        Once the data is in place, the demo takes under a minute, then validation (~3 min) and test (~5 min) run by default. Set `RUN_VALIDATION` or `RUN_TEST` to `False` to skip them. Training is summarized at the end.
     '''),
     code('''
         !git clone -q https://github.com/franciscomendez114/solar-filament-segmentation.git /content/solar-filament-segmentation
@@ -612,8 +612,8 @@ cells = [
         from src.metrics import aggregate_official, annotation_to_rle, official_match_counts
         from src.models import RotationTTA, load_checkpoint
 
-        RUN_VALIDATION = False  # reproduces official PQ 0.4666 on the frozen 106-image split
-        RUN_TEST = False  # writes submission.csv for the 180 test images
+        RUN_VALIDATION = True  # reproduces official PQ 0.4666 on the frozen 106-image split
+        RUN_TEST = True  # writes submission.csv for the 180 test images
         DETECTOR_CONFIDENCE, MASK_THRESHOLD = 0.25, 0.45
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
