@@ -690,9 +690,9 @@ cells = [
 
         1. **Baseline detectors and U-Net:** notebooks `02` and `03`, then `scripts/detector_train_job.py` for the YOLO11m member.
         2. **Unlabeled pool:** `scripts/gong_pool.py` picks and downloads 1,000 GONG frames (`data/processed/gong_pool.json`), and `scripts/check_gong_pool.py` proves none is a test image.
-        3. **Teacher labels:** `scripts/launch_pseudo.py` fuses the 24 teacher views at score >= 0.30. The labels used are in `data/processed/pseudo_boxes.json`.
-        4. **Final detector:** `scripts/detector_train_job.py` with `{"weights": "yolo26l.pt", "imgsz": 1280, "batch": 8, "mosaic": 1.0, "flipud": 0.5, "pseudo": true}`.
-        5. **Final U-Net:** `scripts/unet_train_job.py`, the `b5_sym_s2` run, selected on official PQ.
+        3. **Teacher labels:** `scripts/launch_pseudo.py` fuses the 24 teacher views at score >= 0.30. The teacher list is `configs/teachers.json` and the labels used are in `data/processed/pseudo_boxes.json`.
+        4. **Final detector:** `scripts/detector_train_job.py` with `configs/final_detector.json`.
+        5. **Final U-Net:** `scripts/unet_train_job.py` with `configs/final_unet.json`, selected on official PQ.
     '''),
 ]
 write_notebook("07_final_pipeline.ipynb", cells)

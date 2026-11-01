@@ -1,0 +1,1 @@
+{"l_ps": {"weights": "yolo26l.pt", "imgsz": 1280, "batch": 8, "mosaic": 1.0, "flipud": 0.5, "pseudo": true}}
