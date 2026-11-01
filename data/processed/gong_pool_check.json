@@ -1,0 +1,10 @@
+{
+ "pool_images": 1000,
+ "test_images": 180,
+ "flagged": {},
+ "min_gap_to_test_days": 1.34,
+ "structure_threshold": 0.81,
+ "calibration_same_frame": 0.968,
+ "calibration_closest_different_test_frames": 0.651,
+ "max_pool_to_test_correlation": 0.689
+}

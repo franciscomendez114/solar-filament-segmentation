@@ -1,0 +1,30 @@
+# Local analysis environment, Python 3.14. GPU runs used Colab's preinstalled torch; the final detector trained on the ultralytics version below.
+# Install with: python -m venv .venv && .venv/bin/pip install -r requirements.txt
+
+# Stage 1 detector
+ultralytics==8.4.191
+
+# Stage 2 crop segmentation
+torch==2.13.0
+torchvision==0.28.0
+segmentation-models-pytorch==0.5.0
+timm==1.0.29
+
+# Masks, scoring, and image handling
+pycocotools==2.0.11
+opencv-python==5.0.0.93
+pillow==12.3.0
+numpy==2.5.2
+scipy==1.18.1
+
+# Analysis, diagnostics, and plots
+pandas==3.0.5
+matplotlib==3.11.1
+scikit-learn==1.9.0
+tqdm==4.70.0
+
+# Remote GPU and data access; only needed to reproduce the Colab runs, not to run inference.
+# jupyter-kernel-client must stay pinned: 1.0.x breaks google-colab-cli.
+kaggle==2.2.4
+google-colab-cli==0.6.0
+jupyter-kernel-client==0.15.0
