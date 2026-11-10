@@ -579,11 +579,11 @@ cells = [
     markdown('''
         # Final pipeline, end to end
 
-        **One job:** reproduce the final solution from a clean Colab T4 runtime: a YOLO26l detector (`l_ps`) proposes boxes and one box-prompted U-Net (`b5_sym_s2`) segments each filament. Both checkpoints are in `weights/`.
+        **One job:** reproduce the final solution on Colab: a YOLO26l detector (`l_ps`) proposes boxes and one box-prompted U-Net (`b5_sym_s2`) segments each filament. Both trained models are in `weights/`, so nothing is retrained by default.
 
         **Data:** put the competition download at `/content/kaggle_data`, or leave it to the next cell, which needs a Kaggle token at `~/.kaggle/access_token` from an account that joined the competition. The images are not in this repo because they cannot be redistributed.
 
-        Once the data is in place, the demo takes under a minute, then validation (~3 min) and test (~5 min) run by default. Set `RUN_VALIDATION` or `RUN_TEST` to `False` to skip them. Training is summarized at the end.
+        **Steps:** setup, optional training, load the models, demo, validation PQ, test submission. With the saved weights the notebook runs on a T4 in about 10 minutes: the demo takes under a minute, validation ~3 minutes and test ~5 minutes. Set `RUN_VALIDATION` or `RUN_TEST` to `False` to skip those, or `TRAIN_DETECTOR` / `TRAIN_UNET` to `True` to retrain from scratch on an A100 (see Training).
     '''),
     code('''
         !git clone -q https://github.com/franciscomendez114/solar-filament-segmentation.git /content/solar-filament-segmentation
@@ -592,6 +592,8 @@ cells = [
         !test -d /content/kaggle_data || (kaggle competitions download -c filament-segmentation-2026 -p /content && unzip -q /content/filament-segmentation-2026.zip -d /content/kaggle_data)
     '''),
     code('''
+        import json
+        import shutil
         import sys
         from collections import defaultdict
         from pathlib import Path
@@ -614,18 +616,70 @@ cells = [
 
         RUN_VALIDATION = True  # reproduces official PQ 0.4666 on the frozen 106-image split
         RUN_TEST = True  # writes submission.csv for the 180 test images
+        TRAIN_DETECTOR = False  # True retrains l_ps from COCO weights (A100, ~2 h); False loads weights/l_ps.pt
+        TRAIN_UNET = False  # True retrains b5_sym_s2 from ImageNet weights (A100); False loads weights/b5_sym_s2.pt
+        DETECTOR_WEIGHTS, UNET_WEIGHTS = "weights/l_ps.pt", "weights/b5_sym_s2.pt"
         DETECTOR_CONFIDENCE, MASK_THRESHOLD = 0.25, 0.45
+        POOL_URL = "https://github.com/franciscomendez114/solar-filament-segmentation/releases/download/gong-pool-v1/gong_pool.tar"
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        detector = YOLO("weights/l_ps.pt")
-        unet = RotationTTA(load_checkpoint("weights/b5_sym_s2.pt", "b5", device)[0]).eval()  # 8-way rotation and flip TTA
-        settings = {**DEFAULT_PIPELINE_SETTINGS, "yolo_confidence": 0.01, "yolo_image_size": 1280}
-
         train_dir = next(Path("/content/kaggle_data").rglob("train_images")).parent
         test_paths = sorted(next(Path("/content/kaggle_data").rglob("test_images")).glob("*.jpeg"))
         _, records = load_records(train_dir / "MAGFiLO_1.0_Annotations_kaggle2026_train.json", train_dir / "train_images")
         _, _, validation_records = verify_or_write_split(records, Path("data/processed/split_manifest.json"))
         print(device, len(validation_records), "validation records,", len(test_paths), "test images")
+    '''),
+    markdown('''
+        ## Training (optional)
+
+        Off by default: the notebook then uses the saved weights. With a flag set, the cell below runs the job script that trained the submitted model, with the exact settings in `configs/`, and the rest of the notebook uses the new weights. A retrained model will be close to the saved one but not identical, since GPU training is not deterministic.
+
+        **Detector** (`TRAIN_DETECTOR`, `scripts/detector_train_job.py`, about 2 hours on an A100; batch 8 at 1280 px needs ~24 GB, more than a T4 or L4 has):
+        1. Converts every annotator record's polygons to YOLO boxes on the frozen split (`data/processed/split_manifest.json`).
+        2. Adds 1,000 unlabeled GONG frames, downloaded from this repo's release, with the pseudo-labels in `data/processed/pseudo_boxes.json`. Our 24-view teacher ensemble drew them at fused score >= 0.30; the teachers are not in the repo, their labels are.
+        3. Fine-tunes YOLO26l from COCO weights at 1280 px: batch 8, mosaic 1.0, horizontal and vertical flips, stopping after 25 epochs without a validation mAP gain.
+
+        **U-Net** (`TRAIN_UNET`, `scripts/unet_train_job.py`, A100 recommended):
+        1. Cuts one 512 px crop per annotated filament (grayscale, CLAHE, box prompt) with random expansion 1.25–1.75 and center jitter, plus hard-negative crops (`data/processed/hard_negatives/`).
+        2. Trains an EfficientNet-B5 U-Net with scSE attention from ImageNet weights on BCE + symmetric focal-Tversky loss, seed 2.
+        3. After each epoch, runs the whole pipeline on validation with cached detector boxes (`data/processed/validation_proposals_yolo26x.json`), keeps the epoch with the best official PQ, and stops after 4 epochs without a gain.
+    '''),
+    code('''
+        work = Path("/content")  # the job scripts read their inputs here, as on the training VMs
+
+
+        def run_job(script):
+            (work / "DONE.json").unlink(missing_ok=True)
+            get_ipython().system(f"python {script}")
+            status = json.loads((work / "DONE.json").read_text())
+            assert status["status"] == "ok", status.get("error")
+
+
+        if TRAIN_DETECTOR or TRAIN_UNET:
+            if not (work / "src").exists():
+                (work / "src").symlink_to(Path.cwd() / "src")
+            shutil.copy2("data/processed/split_manifest.json", work / "split_manifest.json")
+        if TRAIN_DETECTOR:
+            shutil.copy2("configs/final_detector.json", work / "detector_runs.json")
+            shutil.copy2("data/processed/pseudo_boxes.json", work / "pseudo_boxes.json")
+            if not (work / "gong_pool.tar").exists():
+                get_ipython().system(f"wget -q -O /content/gong_pool.tar {POOL_URL}")
+            run_job("scripts/detector_train_job.py")
+            (work / "gong_pool.tar").unlink()  # the U-Net job would otherwise switch to its pseudo-mask mode
+            DETECTOR_WEIGHTS = "/content/runs/l_ps/weights/best.pt"
+        if TRAIN_UNET:
+            shutil.copy2("configs/final_unet.json", work / "unet_runs.json")
+            shutil.copy2("data/processed/hard_negatives/hard_negatives_yolo26x_conf005.json", work / "hard_negatives_yolo26x_conf005.json")
+            shutil.copy2("data/processed/validation_proposals_yolo26x.json", work / "validation_proposals_yolo26x.json")
+            run_job("scripts/unet_train_job.py")
+            UNET_WEIGHTS = "/content/results/b5_sym_s2.pt"
+        print("detector:", DETECTOR_WEIGHTS, "| U-Net:", UNET_WEIGHTS)
+    '''),
+    markdown("## Load the models\n\nThe saved weights, or the ones trained above. Stage 1 keeps boxes with confidence >= 0.25; Stage 2 averages each crop's mask over 8 rotations and flips."),
+    code('''
+        detector = YOLO(DETECTOR_WEIGHTS)
+        unet = RotationTTA(load_checkpoint(UNET_WEIGHTS, "b5", device)[0]).eval()  # 8-way rotation and flip TTA
+        settings = {**DEFAULT_PIPELINE_SETTINGS, "yolo_confidence": 0.01, "yolo_image_size": 1280}
 
 
         def final_boxes(image_paths):
@@ -684,15 +738,12 @@ cells = [
             print(len(submission), "masks in submission.csv")
     '''),
     markdown('''
-        ## Training
+        ## Where the training inputs came from
 
-        Training ran on Colab GPUs through the scripts below, not in this notebook: the final detector took about two hours on an A100.
-
-        1. **Baseline detectors and U-Net:** notebooks `02` and `03`, then `scripts/detector_train_job.py` for the YOLO11m member.
-        2. **Unlabeled pool:** `scripts/gong_pool.py` picks and downloads 1,000 GONG frames (`data/processed/gong_pool.json`), and `scripts/check_gong_pool.py` proves none is a test image.
-        3. **Teacher labels:** `scripts/launch_pseudo.py` fuses the 24 teacher views at score >= 0.30. The teacher list is `configs/teachers.json` and the labels used are in `data/processed/pseudo_boxes.json`.
-        4. **Final detector:** `scripts/detector_train_job.py` with `configs/final_detector.json`.
-        5. **Final U-Net:** `scripts/unet_train_job.py` with `configs/final_unet.json`, selected on official PQ.
+        - **Baseline detectors and U-Net:** notebooks `02` and `03`, and `scripts/detector_train_job.py` for the YOLO11m member. With their mirrored views they are the 24 teacher views (`configs/teachers.json`).
+        - **Unlabeled pool:** `scripts/gong_pool.py` picked and downloaded the 1,000 GONG frames (`data/processed/gong_pool.json`), and `scripts/check_gong_pool.py` shows none is a test image.
+        - **Pseudo-labels:** `scripts/detector_train_job.py` fused the teacher views at score >= 0.30 into `data/processed/pseudo_boxes.json`.
+        - **Hard negatives and validation boxes for U-Net selection:** cached from the September YOLO26x detector, by notebook `02` (`MINE_HARD_NEGATIVES`) and `scripts/experiments/build_validation_proposals.py`.
     '''),
 ]
 write_notebook("07_final_pipeline.ipynb", cells)

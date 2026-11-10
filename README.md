@@ -27,31 +27,25 @@ The final pipeline ties both ensembles on validation (paired 95% CI includes zer
 
 ## Run it
 
-Open `notebooks/07_final_pipeline.ipynb` in Colab with a GPU runtime and run it from top to bottom. It clones this repo, uses the two checkpoints in `weights/`, shows a prediction, reproduces the validation score, and writes `submission.csv`. Set `RUN_VALIDATION` or `RUN_TEST` to `False` to skip those last two steps.
+Open `notebooks/07_final_pipeline.ipynb` in Colab with a GPU runtime and run it from top to bottom. By default it clones this repo, loads the two models in `weights/`, shows a prediction, reproduces the validation score, and writes `submission.csv`, in about 10 minutes on a T4. Set `RUN_VALIDATION` or `RUN_TEST` to `False` to skip those last two steps.
 
 Competition images and labels are not in this repo because they cannot be redistributed. Put them at `/content/kaggle_data`, or let the notebook download them with a Kaggle token at `~/.kaggle/access_token` from an account that joined the competition.
 
-## Training code
+## Training
 
-Notebook 07 uses saved weights. Training ran on Colab GPUs through the job scripts below, and each one reads its run list from a file in `configs/`.
+The notebook's optional Training section retrains either model from scratch: set `TRAIN_DETECTOR` or `TRAIN_UNET` to `True`, and the rest of the notebook uses the new weights. It runs the same job scripts that trained the submitted models, with the settings in `configs/`. The detector needs an A100 (about 24 GB at batch 8, about two hours), and the notebook downloads its 1,000 GONG frames from this repo's release `gong-pool-v1`.
 
 | Step | Code | Settings |
 |---|---|---|
-| Final detector `l_ps` | `scripts/detector_train_job.py`, started by `scripts/launch_pseudo.py` | `configs/final_detector.json` |
+| Final detector `l_ps` | `scripts/detector_train_job.py` | `configs/final_detector.json` |
 | Final U-Net `b5_sym_s2` | `scripts/unet_train_job.py`, with the training loop in `train_crop_unet` (`src/models.py`) | `configs/final_unet.json` |
 | GONG pool | `scripts/gong_pool.py`, `scripts/check_gong_pool.py` | `data/processed/gong_pool.json` |
 | Pseudo-labels | `detector_train_job.py`, which fuses the 24 teacher views at score >= 0.30 | `configs/teachers.json` |
 | Baseline detectors and U-Net | notebooks `02` and `03` | `src/config.py` |
 
-The 24 teacher views are not in this repo, and neither are the exact settings of the YOLO11m teacher. Their output is: `data/processed/pseudo_boxes.json` holds the labels the final detector trained on, so it can be retrained without them. These scripts were not re-run from this repo, so a retrain may not match the saved weights exactly.
+The 24 teacher views are not in this repo, and neither are the exact settings of the YOLO11m teacher. Their output is: `data/processed/pseudo_boxes.json` holds the labels the final detector trained on, so it can be retrained without them. The training cells were tested on Colab with shortened runs (1 detector epoch at batch 4 on an L4, 2 U-Net epochs): every cell ran and the rest of the notebook used the new weights. A full retrain was not repeated from this repo, and GPU training is not deterministic, so a retrain will be close to the saved weights but not identical.
 
-The final detector took about two hours on an A100. To retrain it from the saved labels:
-
-```bash
-python scripts/launch_pseudo.py SESSION configs/final_detector.json --labels data/processed/pseudo_boxes.json --gpu A100
-```
-
-The top of each job script lists the files it expects on the VM. `scripts/export_final_weights.py` writes the checkpoints in `weights/` from those runs.
+Outside the notebook, `scripts/launch_pseudo.py SESSION configs/final_detector.json --labels data/processed/pseudo_boxes.json --gpu A100` runs the detector job on a fresh Colab VM, and the top of each job script lists the files it expects there. `scripts/export_final_weights.py` writes the checkpoints in `weights/` from those runs.
 
 ## Repository
 
@@ -67,7 +61,9 @@ The top of each job script lists the files it expects on the VM. `scripts/export
 
 ## External data
 
-Detector training used 1,000 unlabeled GONG H-alpha frames, pseudo-labeled by our own ensemble, as the organizers permit. Each frame was checked against the test set by timestamp, file hash, and image correlation (`scripts/check_gong_pool.py`). The public MAGFiLO archive was never used. The final detector scores the same on validation without this data.
+Detector training used 1,000 unlabeled GONG H-alpha frames from the NSO archive, pseudo-labeled by our own ensemble, as the organizers permit. They are in this repo's release `gong-pool-v1`. Each frame was checked against the test set by timestamp, file hash, and image correlation (`scripts/check_gong_pool.py`). The public MAGFiLO archive was never used. The final detector scores the same on validation without this data.
+
+GONG data courtesy of the NSO Integrated Synoptic Program (NISP), National Solar Observatory, operated by AURA, Inc. under a cooperative agreement with the National Science Foundation.
 
 ## License and acknowledgment
 
