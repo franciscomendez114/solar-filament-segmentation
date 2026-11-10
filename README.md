@@ -57,6 +57,7 @@ Outside the notebook, `scripts/launch_pseudo.py SESSION configs/final_detector.j
 - `scripts/experiments/`: one-off experiments and the ensemble path, kept as a record. Like the report scripts, most need run outputs that are not in this repo.
 - `data/processed/`: the frozen split (seed 42, 15% of physical images), hard negatives, and the GONG pool list with its pseudo-labels.
 - `experiments/registry.csv` and `submissions/leaderboard_log.csv`: every run and every Kaggle score.
+- `submissions/kaggle_submission.csv`: the exact file submitted to Kaggle for the final pipeline (2026-10-29 02:07 UTC, public 0.39).
 - `report/`: LaTeX source, figures, and the PDF.
 
 ## External data
