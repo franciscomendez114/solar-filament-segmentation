@@ -1,68 +1,106 @@
 # Compressing a Detector Ensemble into a Compact Two-Stage Filament Segmenter
 
-Our solution to the [Solar Filament Segmentation Challenge 2026](https://www.kaggle.com/competitions/filament-segmentation-2026): instance segmentation of solar filaments in 2048×2048 GONG H-alpha images. The method and evaluation are described in the technical report, `report/report.pdf`.
+Francisco Mendez, Rice University. Our solution to the [Solar Filament Segmentation Challenge 2026](https://www.kaggle.com/competitions/filament-segmentation-2026).
 
-## Pipeline
+| | |
+|---|---|
+| **Technical report** | [`report/report.pdf`](report/report.pdf) |
+| **Demo notebook** | [`notebooks/07_final_pipeline.ipynb`](notebooks/07_final_pipeline.ipynb), [open in Colab](https://colab.research.google.com/github/franciscomendez114/solar-filament-segmentation/blob/main/notebooks/07_final_pipeline.ipynb) |
+| **Kaggle submission** | [`submissions/kaggle_submission.csv`](submissions/kaggle_submission.csv), the exact file submitted (public leaderboard 0.39) |
+| **Trained models** | [`weights/`](weights/): `l_ps.pt` (detector) and `b5_sym_s2.pt` (U-Net) |
+
+## In short
+
+The task is to find every solar filament in a 2048×2048 GONG H-alpha image of the Sun and return one non-overlapping mask per filament, scored by panoptic quality (PQ) against each annotator's labels.
+
+Our pipeline has two stages. A YOLO26l detector draws a box around each filament, and a U-Net segments the one filament inside a crop around each box. An ensemble of 17 detectors and 3 U-Nets reached 0.40 on the public leaderboard. The final pipeline, one detector and one U-Net, scores 0.39 and is statistically tied with that ensemble on our validation split, with 85% fewer parameters and one detector pass per image.
+
+## Quick start
+
+1. Open the notebook [in Colab](https://colab.research.google.com/github/franciscomendez114/solar-filament-segmentation/blob/main/notebooks/07_final_pipeline.ipynb) with a GPU runtime. A free T4 is enough.
+2. Provide the competition data, which is not in this repo because it cannot be redistributed. Either put a Kaggle API token at `~/.kaggle/access_token` from an account that joined the competition, and the first cell downloads the data, or put the unzipped competition download at `/content/kaggle_data`.
+3. Run all cells. In about 10 minutes on a T4, including installation and the data download, the notebook:
+   - clones this repo and installs the pinned packages,
+   - loads the two trained models from `weights/`,
+   - shows the boxes and masks on one validation image,
+   - scores our validation split with the official metric: expected **PQ 0.4666 (TP 828, FP 360, FN 430)**,
+   - writes `submission.csv` for the 180 test images.
+
+Nothing is retrained by default. A rerun matches our Kaggle file closely but not byte for byte, because GPU inference is not deterministic: in our last run from this public repo it wrote 1,239 masks against the submitted 1,237, and every submitted mask has a rerun mask with IoU above 0.9 (98.8% above 0.99). Set `RUN_VALIDATION` or `RUN_TEST` to `False` to skip those steps.
+
+## How it works
 
 ```
 2048² image → YOLO26l @1280 proposes one box per filament (confidence ≥ 0.25, NMS IoU 0.20)
 → each box becomes a square crop (1.5× its longer side), resized to 512²
-→ U-Net (EfficientNet-B5, scSE) on gray + CLAHE + box prompt, with 8-way TTA
-→ paste back, threshold at 0.45, remove duplicates, resolve contested pixels
+→ U-Net (EfficientNet-B5 encoder, scSE attention) on 3 channels: grayscale, CLAHE, box prompt
+→ mask averaged over 8 rotations and flips of the crop (test-time augmentation)
+→ pasted back at full size, thresholded at 0.45, duplicates removed, contested pixels resolved
 → one non-overlapping mask per filament
 ```
 
+- **Why two stages:** filaments are thin and small. Cropping around each box means 97% of validation crops are enlarged, not shrunk, when resized to the U-Net's 512² input, so thin filaments keep their width.
+- **Why a box prompt:** the third crop channel marks which box to segment, so the U-Net returns one filament even when a crop contains several.
+- **Detector training:** YOLO26l fine-tuned on the competition images plus 1,000 unlabeled GONG images pseudo-labeled by our ensemble (see [External data](#external-data)).
+- **U-Net training:** competition data only, selected by running the whole pipeline on validation after each epoch and keeping the best official PQ.
+
+The report gives every setting and the evidence for each choice.
+
 ## Results
 
-Official PQ on our held-out validation split (106 images, 170 annotator records, 1,258 filaments). The organizers' evaluation code gives the same score to six decimals.
+All validation numbers use our held-out split (106 images, 170 annotator records, 1,258 filaments) and the official metric. The organizers' evaluation code gives the same PQ to six decimals. A *view* is one detector run on the original, horizontally flipped or vertically flipped image.
 
 | Pipeline | Detector views | Parameters | Validation PQ | Public leaderboard |
 |---|---|---|---|---|
 | Baseline (YOLO26x + B5 U-Net) | 1 | 90M | 0.427 | 0.36 |
 | Ensemble, 8 detectors + 3 U-Nets | 24 | 253M | 0.474 | 0.39 |
 | Ensemble, 17 detectors + 3 U-Nets | 51 | 383M | 0.474 | 0.40 |
-| **Final (one detector + one U-Net)** | 1 | 57.5M | 0.467 | 0.39 |
+| **Final: 1 detector + 1 U-Net** | 1 | 57.5M | 0.467 | 0.39 |
 
-The final pipeline ties both ensembles on validation (paired 95% CI includes zero) and takes 1.57 s per image on a T4 GPU, about five minutes for the 180 test images.
+- **Final vs. baseline:** +0.039 PQ (95% CI +0.027 to +0.052), finding 45 more filaments with 104 fewer false positives.
+- **Final vs. ensembles:** tied (the paired 95% intervals include zero).
+- **Mask quality (organizers' code, final pipeline):** mean IoU 0.60 and Dice 0.73 over all overlapping prediction–annotation pairs, 3.5% fragmentation and 2.0% over-merging.
+- **Speed:** 1.57 s per image on a T4, about five minutes for the 180 test images.
 
-## Run it
+## Training (optional)
 
-Open `notebooks/07_final_pipeline.ipynb` in Colab with a GPU runtime and run it from top to bottom. By default it clones this repo, loads the two models in `weights/`, shows a prediction, reproduces the validation score, and writes `submission.csv`, in about 10 minutes on a T4. Set `RUN_VALIDATION` or `RUN_TEST` to `False` to skip those last two steps.
+The notebook's Training section can retrain either model from scratch. Set `TRAIN_DETECTOR` or `TRAIN_UNET` to `True`, and the rest of the notebook uses the new weights. It runs the same job scripts that trained the submitted models, with the exact settings in `configs/`.
 
-Competition images and labels are not in this repo because they cannot be redistributed. Put them at `/content/kaggle_data`, or let the notebook download them with a Kaggle token at `~/.kaggle/access_token` from an account that joined the competition.
+| Model | Code | Settings | Hardware |
+|---|---|---|---|
+| Detector `l_ps` | `scripts/detector_train_job.py` | `configs/final_detector.json` | A100 (~24 GB at batch 8), about 2 hours |
+| U-Net `b5_sym_s2` | `scripts/unet_train_job.py`, training loop in `src/models.py` | `configs/final_unet.json` | A100 recommended |
 
-## Training
+Inputs the training uses, all included in this repo:
 
-The notebook's optional Training section retrains either model from scratch: set `TRAIN_DETECTOR` or `TRAIN_UNET` to `True`, and the rest of the notebook uses the new weights. It runs the same job scripts that trained the submitted models, with the settings in `configs/`. The detector needs an A100 (about 24 GB at batch 8, about two hours), and the notebook downloads its 1,000 GONG frames from this repo's release `gong-pool-v1`.
+- **The frozen split:** `data/processed/split_manifest.json` (seed 42, 15% of physical images).
+- **GONG frames:** 1,000 unlabeled images in this repo's release [`gong-pool-v1`](https://github.com/franciscomendez114/solar-filament-segmentation/releases/tag/gong-pool-v1), downloaded by the notebook.
+- **Pseudo-labels:** `data/processed/pseudo_boxes.json`, the 4,840 boxes our 24-view teacher ensemble drew on those frames.
+- **Hard negatives and validation boxes for the U-Net:** `data/processed/hard_negatives/` and `data/processed/validation_proposals_yolo26x.json`.
 
-| Step | Code | Settings |
-|---|---|---|
-| Final detector `l_ps` | `scripts/detector_train_job.py` | `configs/final_detector.json` |
-| Final U-Net `b5_sym_s2` | `scripts/unet_train_job.py`, with the training loop in `train_crop_unet` (`src/models.py`) | `configs/final_unet.json` |
-| GONG pool | `scripts/gong_pool.py`, `scripts/check_gong_pool.py` | `data/processed/gong_pool.json` |
-| Pseudo-labels | `detector_train_job.py`, which fuses the 24 teacher views at score >= 0.30 | `configs/teachers.json` |
-| Baseline detectors and U-Net | notebooks `02` and `03` | `src/config.py` |
-
-The 24 teacher views are not in this repo, and neither are the exact settings of the YOLO11m teacher. Their output is: `data/processed/pseudo_boxes.json` holds the labels the final detector trained on, so it can be retrained without them. The training cells were tested on Colab with shortened runs (1 detector epoch at batch 4 on an L4, 2 U-Net epochs): every cell ran and the rest of the notebook used the new weights. A full retrain was not repeated from this repo, and GPU training is not deterministic, so a retrain will be close to the saved weights but not identical.
-
-Outside the notebook, `scripts/launch_pseudo.py SESSION configs/final_detector.json --labels data/processed/pseudo_boxes.json --gpu A100` runs the detector job on a fresh Colab VM, and the top of each job script lists the files it expects there. `scripts/export_final_weights.py` writes the checkpoints in `weights/` from those runs.
+The teacher detectors themselves are not in this repo, but their labels are, so the final detector can be retrained without them. The training cells were tested on Colab with shortened runs (1 detector epoch at batch 4 on an L4, 2 U-Net epochs): every cell ran and the rest of the notebook used the new weights. A full retrain was not repeated from this repo, and GPU training is not deterministic, so a retrain will be close to the saved weights but not identical.
 
 ## Repository
 
-- `src/`: splitting, crops, models, inference, official scorer.
-- `configs/`: the exact training settings of the final detector and U-Net, and the teacher list.
-- `weights/`: the two final checkpoints. The U-Net is stored as fp16 to fit GitHub's file limit.
-- `notebooks/`: `07` is the final pipeline. `01`–`06` are the development notebooks and expect a Drive project folder. All are generated by `build_notebooks.py`, so edit that file rather than the notebooks.
-- `scripts/`: what the final pipeline and report need: training jobs, the GONG pool checks, evaluation, and the report's figures. `official_eval.py` is the organizers' evaluation code, unmodified.
-- `scripts/experiments/`: one-off experiments and the ensemble path, kept as a record. Like the report scripts, most need run outputs that are not in this repo.
-- `data/processed/`: the frozen split (seed 42, 15% of physical images), hard negatives, and the GONG pool list with its pseudo-labels.
-- `experiments/registry.csv` and `submissions/leaderboard_log.csv`: every run and every Kaggle score.
-- `submissions/kaggle_submission.csv`: the exact file submitted to Kaggle for the final pipeline (2026-10-29 02:07 UTC, public 0.39).
-- `report/`: LaTeX source, figures, and the PDF.
+| Path | Contents |
+|---|---|
+| `notebooks/07_final_pipeline.ipynb` | The demo notebook: the whole pipeline, with optional training. |
+| `notebooks/01`–`06` | Development notebooks. They expect our Google Drive project folder, so they document the work rather than run here. |
+| `src/` | The pipeline code: data split, crops, models, training loop, inference, official scorer. |
+| `weights/` | The two final models. The U-Net is stored as fp16 to fit GitHub's file limit. |
+| `configs/` | Exact training settings of the final models, and the teacher list. |
+| `scripts/` | Training jobs, GONG pool selection and checks, evaluation, and the report's figures. `official_eval.py` is the organizers' evaluation code, unmodified. |
+| `scripts/experiments/` | One-off experiments and the ensemble pipeline, kept as a record. Most need outputs that are not in this repo. |
+| `data/processed/` | Split, pseudo-labels, GONG pool list and test-overlap check, hard negatives, cached validation boxes. |
+| `experiments/registry.csv` | Every experiment run with its score. |
+| `submissions/` | `kaggle_submission.csv` (the submitted file) and `leaderboard_log.csv` (every Kaggle score). |
+| `report/` | The report PDF, its LaTeX source and figures. |
+| `requirements.txt` | Pinned packages. The notebook installs what it needs itself. |
+| `build_notebooks.py` | Generates all notebooks; edit it rather than the notebooks. |
 
 ## External data
 
-Detector training used 1,000 unlabeled GONG H-alpha frames from the NSO archive, pseudo-labeled by our own ensemble, as the organizers permit. They are in this repo's release `gong-pool-v1`. Each frame was checked against the test set by timestamp, file hash, and image correlation (`scripts/check_gong_pool.py`). The public MAGFiLO archive was never used. The final detector scores the same on validation without this data.
+The organizers permit unlabeled GONG H-alpha images. Detector training used 1,000 such frames from the NSO archive, pseudo-labeled by our own ensemble. Each frame was checked against all 180 test images by timestamp, file hash and image correlation (`scripts/check_gong_pool.py`), and none was flagged. The public MAGFiLO archive, which contains test labels, was never used, and test images are used only for inference. The final detector scores the same on validation without this data (PQ 0.466 vs. 0.467).
 
 GONG data courtesy of the NSO Integrated Synoptic Program (NISP), National Solar Observatory, operated by AURA, Inc. under a cooperative agreement with the National Science Foundation.
 
